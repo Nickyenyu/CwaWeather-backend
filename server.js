@@ -9,6 +9,7 @@ const PORT = process.env.PORT || 3000;
 // === 核心設定 ===
 // 改用 F-D0047-091 (全台鄉鎮未來1週天氣預報)
 const CWA_API_BASE_URL = "https://opendata.cwa.gov.tw/api";
+// 從 Zeabur 的環境變數讀取 API Key
 const CWA_API_KEY = process.env.CWA_API_KEY;
 
 // Middleware
@@ -56,7 +57,7 @@ const getWeeklyWeather = async (req, res) => {
       return res.status(400).json({ error: "不支援的城市", message: `代碼錯誤: ${cityCode}` });
     }
     if (!CWA_API_KEY) {
-      return res.status(500).json({ error: "設定錯誤", message: "缺少 API KEY" });
+      return res.status(500).json({ error: "設定錯誤", message: "缺少 CWA_API_KEY，請至 Zeabur 設定變數" });
     }
 
     // 2. 呼叫 CWA API (F-D0047-091)
@@ -74,17 +75,15 @@ const getWeeklyWeather = async (req, res) => {
 
     // 3. 資料檢核與尋找
     // API 回傳結構：records -> locations[0] -> location[]
+    // 注意：opendata API 有時候會包很多層，F-D0047-091 的 locations[0] 通常包含該地區所有鄉鎮
+    if (!response.data.records || !response.data.records.locations || response.data.records.locations.length === 0) {
+        throw new Error("API 回傳結構異常");
+    }
+
     const dataset = response.data.records.locations[0]; 
     const locationList = dataset.location;
 
-    // 因為不同縣市可能有同名行政區 (例如好幾個縣市都有中正區、東區)
-    // 我們必須多做一層檢查，確認找到的資料屬於正確的縣市
-    // 但 F-D0047-091 的 location 裡面通常沒有縣市欄位，而是它的上層 locations[0].locationsName
-    // 幸運的是，我們傳入 district 查詢時，API 會回傳全台所有叫這個名字的區。
-    // 我們採取簡易策略：通常查詢結果的第一筆或比對 dataset 的 locationsName (但 091 是全台)
-    // 為了最穩定的結果，我們直接拿第一筆符合 district 名稱的資料。
-    // (進階作法是比對 lat/lon，但這裡做 MVP 先求有)
-    
+    // 找到對應行政區的資料
     const matchedLocation = locationList.find(loc => loc.locationName === targetLoc.district);
 
     if (!matchedLocation) {
@@ -124,7 +123,6 @@ const getWeeklyWeather = async (req, res) => {
 
             dailyForecasts.push({
                 date: dateStr,
-                dayName: "", // 前端處理星期幾
                 weather: item.elementValue[0].value, // 例如：多雲時陰
                 temp: tempVal,
                 rain: safeRain
@@ -134,7 +132,7 @@ const getWeeklyWeather = async (req, res) => {
 
     // 5. 回傳資料
     // 分割：今天(current) 與 未來(forecasts)
-    // 有時候因為時區關係，第一筆可能是昨天晚上，所以我們取前 8 筆資料來處理
+    // 我們取第一筆當今天，後面 7 筆當預報
     const current = dailyForecasts[0];
     const future = dailyForecasts.slice(1, 8); // 取後續 7 天
 
@@ -160,12 +158,14 @@ const getWeeklyWeather = async (req, res) => {
 };
 
 // Routes
-app.get("/", (req, res) => res.json({ message: "Zootopia Weather API (7-Day Edition)" }));
-app.get("/api/health", (req, res) => res.json({ status: "OK", time: new Date() }));
+app.get("/", (req, res) => res.json({ message: "Zootopia Weather API (7-Day Edition) is Running!" }));
+app.get("/api/health", (req, res) => res.json({ status: "OK", time: new Date().toISOString() }));
 app.get("/api/weather/:city", getWeeklyWeather);
 
-// Error Handling
-app.use((req, res) => res.status(404).json({ error: "Path Not Found" }));
+// 404 Handler
+app.use((req, res) => res.status(404).json({ error: "Path Not Found", message: "請檢查您的 API 路徑是否正確" }));
+
+// Start Server
 app.listen(PORT, () => {
     console.log(`🚀 Server is running on port ${PORT}`);
     console.log(`📍 Mode: 7-Day Forecast (F-D0047-091)`);
