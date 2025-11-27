@@ -32,15 +32,41 @@ const getKaohsiungWeather = async (req, res) => {
 
     // 呼叫 CWA API - 一般天氣預報（36小時）
     // API 文件: https://opendata.cwa.gov.tw/dist/opendata-swagger.html
-    const response = await axios.get(
-      `${CWA_API_BASE_URL}/v1/rest/datastore/F-C0032-001`,
-      {
-        params: {
-          Authorization: CWA_API_KEY,
-          locationName: "臺北市",
-        },
-      }
-    );
+  // === 修改：全台 22 縣市中英對照表 ===
+const CITY_MAP = {
+  // 六都
+  taipei: "臺北市",
+  new_taipei: "新北市",
+  taoyuan: "桃園市",
+  taichung: "臺中市", 
+  tainan: "臺南市",
+  kaohsiung: "高雄市",
+  
+  // 北部
+  keelung: "基隆市",
+  hsinchu_city: "新竹市",
+  hsinchu_county: "新竹縣",
+  yilan: "宜蘭縣",
+  
+  // 中部
+  miaoli: "苗栗縣",
+  changhua: "彰化縣",
+  nantou: "南投縣",
+  yunlin: "雲林縣",
+  
+  // 南部
+  chiayi_city: "嘉義市",
+  chiayi_county: "嘉義縣",
+  pingtung: "屏東縣",
+  
+  // 東部 & 外島
+  hualien: "花蓮縣",
+  taitung: "臺東縣",
+  penghu: "澎湖縣",
+  kinmen: "金門縣",
+  lienchiang: "連江縣"
+};
+
 
     // 取得高雄市的天氣資料
     const locationData = response.data.records.location[0];
