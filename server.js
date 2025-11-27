@@ -6,7 +6,8 @@ const axios = require("axios");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// === 核心設定 ===
+// === 設定 ===
+// 使用最穩定的 F-C0032-001 (一般天氣預報-今明 36 小時)
 const CWA_API_BASE_URL = "https://opendata.cwa.gov.tw/api";
 const CWA_API_KEY = process.env.CWA_API_KEY;
 
@@ -15,7 +16,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// === 縣市對照表 ===
+// === 全台 22 縣市對照表 ===
 const CITY_MAP = {
   taipei: "臺北市",
   new_taipei: "新北市",
@@ -35,126 +36,83 @@ const CITY_MAP = {
   pingtung: "屏東縣",
   yilan: "宜蘭縣",
   hualien: "花蓮縣",
-  taitung: { name: "臺東縣" }, 
+  taitung: "臺東縣",
   penghu: "澎湖縣",
   kinmen: "金門縣",
   lienchiang: "連江縣"
 };
 
-/**
- * 取得一週天氣預報 (7-Day Forecast - County Level)
- */
-const getWeeklyWeather = async (req, res) => {
+const getCityWeather = async (req, res) => {
   try {
     const cityCode = req.params.city;
-    let cityName = CITY_MAP[cityCode];
-    if (typeof cityName === 'object') cityName = cityName.name;
+    const targetLocation = CITY_MAP[cityCode];
 
-    if (!cityName) {
+    if (!targetLocation) {
       return res.status(400).json({ error: "不支援的城市", message: `代碼錯誤: ${cityCode}` });
     }
     if (!CWA_API_KEY) {
       return res.status(500).json({ error: "設定錯誤", message: "缺少 CWA_API_KEY" });
     }
 
-    // 呼叫 API (F-D0047-093 縣市版 7 天預報)
-    // ⚠️ 修正：改抓 MinT, MaxT (因為 7 天預報沒有平均溫度 T)
+    // 呼叫 36小時預報 API
     const response = await axios.get(
-      `${CWA_API_BASE_URL}/v1/rest/datastore/F-D0047-093`,
+      `${CWA_API_BASE_URL}/v1/rest/datastore/F-C0032-001`,
       {
         params: {
           Authorization: CWA_API_KEY,
-          locationName: cityName,
-          elementName: "Wx,MinT,MaxT,PoP12h" 
+          locationName: targetLocation,
         },
       }
     );
 
-    if (!response.data.records || !response.data.records.locations || response.data.records.locations.length === 0) {
-       throw new Error("API 回傳空資料，請檢查 API Key");
-    }
-
-    const dataset = response.data.records.locations[0]; 
-    const locationData = dataset.location[0];
-
+    const locationData = response.data.records.location[0];
     if (!locationData) {
-      throw new Error(`找不到 ${cityName} 的資料`);
+      throw new Error(`找不到 ${targetLocation} 的資料`);
     }
+
+    const weatherData = {
+      city: locationData.locationName,
+      cityCode: cityCode,
+      forecasts: [],
+    };
 
     const weatherElements = locationData.weatherElement;
-    
-    // 安全地取得資料陣列 (防呆)
-    const getEl = (code) => {
-        const found = weatherElements.find(e => e.elementName === code);
-        return found ? found.time : [];
-    };
-    
-    const wxList = getEl("Wx");
-    const minTList = getEl("MinT"); // 最低溫
-    const maxTList = getEl("MaxT"); // 最高溫
-    const popList = getEl("PoP12h");
+    const timeCount = weatherElements[0].time.length;
 
-    const dailyForecasts = [];
-    const processedDates = new Set();
+    for (let i = 0; i < timeCount; i++) {
+      const forecast = {
+        startTime: weatherElements[0].time[i].startTime,
+        endTime: weatherElements[0].time[i].endTime,
+        weather: "",
+        rain: "",
+        minTemp: "",
+        maxTemp: "",
+      };
 
-    // 遍歷資料
-    wxList.forEach((item, index) => {
-        const startTime = item.startTime;
-        const dateStr = startTime.split("T")[0]; 
-
-        if (!processedDates.has(dateStr)) {
-            processedDates.add(dateStr);
-            
-            // 安全取值 (使用 Optional Chaining ?.)
-            const minVal = minTList[index]?.elementValue[0].value;
-            const maxVal = maxTList[index]?.elementValue[0].value;
-            const rainVal = popList[index]?.elementValue[0].value || "0";
-            
-            // ⚠️ 修正：手動計算平均溫度給前端
-            let avgTemp = "--";
-            if (minVal && maxVal) {
-                avgTemp = Math.round((parseInt(minVal) + parseInt(maxVal)) / 2).toString();
-            }
-
-            const safeRain = rainVal === " " ? "0" : rainVal;
-
-            dailyForecasts.push({
-                date: dateStr,
-                weather: item.elementValue[0].value,
-                temp: avgTemp, // 前端依舊讀取這個 temp 欄位
-                rain: safeRain
-            });
+      weatherElements.forEach((element) => {
+        const value = element.time[i].parameter;
+        switch (element.elementName) {
+          case "Wx": forecast.weather = value.parameterName; break;
+          case "PoP": forecast.rain = value.parameterName + "%"; break;
+          case "MinT": forecast.minTemp = value.parameterName; break;
+          case "MaxT": forecast.maxTemp = value.parameterName; break;
         }
-    });
+      });
+      weatherData.forecasts.push(forecast);
+    }
 
-    const current = dailyForecasts[0];
-    const future = dailyForecasts.slice(1, 8); 
-
-    res.json({
-      success: true,
-      data: {
-        city: cityName,
-        district: "", 
-        current: current,
-        forecasts: future
-      }
-    });
+    res.json({ success: true, data: weatherData });
 
   } catch (error) {
     console.error("API Error:", error.message);
-    res.status(500).json({ 
-        error: "Server Error", 
-        message: error.message,
-        detail: error.response?.data || "無法取得外部資料"
-    });
+    res.status(500).json({ error: "Server Error", message: error.message });
   }
 };
 
-app.get("/", (req, res) => res.json({ message: "Zootopia Weather API (7-Day County Edition)" }));
-app.get("/api/health", (req, res) => res.json({ status: "OK", time: new Date() }));
-app.get("/api/weather/:city", getWeeklyWeather);
-app.use((req, res) => res.status(404).json({ error: "Path Not Found" }));
+app.get("/", (req, res) => res.json({ message: "Zootopia Weather API (36H Stable)" }));
+app.get("/api/health", (req, res) => res.json({ status: "OK" }));
+app.get("/api/weather/:city", getCityWeather);
 
 app.listen(PORT, () => {
-    console.log(`🚀 Server is running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT} (Mode: 36H Stable)`);
 });
