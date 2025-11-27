@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // CWA API 設定
-const CWA_API_BASE_URL = "https://opendata.cwa.gov.tw/api";
+const CWA_API_BASE_URL = "CWA-5148ABEE-8536-4509-935F-886A4AC68F25";
 const CWA_API_KEY = process.env.CWA_API_KEY;
 
 // Middleware
