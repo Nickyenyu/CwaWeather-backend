@@ -15,7 +15,7 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// === 縣市對照表 (回歸單純，不需要行政區了) ===
+// === 縣市對照表 ===
 const CITY_MAP = {
   taipei: "臺北市",
   new_taipei: "新北市",
@@ -35,7 +35,7 @@ const CITY_MAP = {
   pingtung: "屏東縣",
   yilan: "宜蘭縣",
   hualien: "花蓮縣",
-  taitung: { name: "臺東縣", fallback: "台東縣" }, // 氣象局有時候很調皮，保留一點彈性
+  taitung: { name: "臺東縣" }, 
   penghu: "澎湖縣",
   kinmen: "金門縣",
   lienchiang: "連江縣"
@@ -47,12 +47,9 @@ const CITY_MAP = {
 const getWeeklyWeather = async (req, res) => {
   try {
     const cityCode = req.params.city;
-    // 取得中文縣市名稱
-    // 考慮到 taitung 可能是物件的情況
     let cityName = CITY_MAP[cityCode];
     if (typeof cityName === 'object') cityName = cityName.name;
 
-    // 1. 基本檢查
     if (!cityName) {
       return res.status(400).json({ error: "不支援的城市", message: `代碼錯誤: ${cityCode}` });
     }
@@ -60,57 +57,71 @@ const getWeeklyWeather = async (req, res) => {
       return res.status(500).json({ error: "設定錯誤", message: "缺少 CWA_API_KEY" });
     }
 
-    // 2. 呼叫 API (改用 F-D0047-093 縣市版 7 天預報)
-    // 這個 API 可以直接用 locationName=臺北市
+    // 呼叫 API (F-D0047-093 縣市版 7 天預報)
+    // ⚠️ 修正：改抓 MinT, MaxT (因為 7 天預報沒有平均溫度 T)
     const response = await axios.get(
       `${CWA_API_BASE_URL}/v1/rest/datastore/F-D0047-093`,
       {
         params: {
           Authorization: CWA_API_KEY,
           locationName: cityName,
-          elementName: "Wx,T,PoP12h"
+          elementName: "Wx,MinT,MaxT,PoP12h" 
         },
       }
     );
 
-    // 3. 資料檢核
     if (!response.data.records || !response.data.records.locations || response.data.records.locations.length === 0) {
        throw new Error("API 回傳空資料，請檢查 API Key");
     }
 
-    // F-D0047-093 的結構： records.locations[0].location[]
     const dataset = response.data.records.locations[0]; 
-    const locationData = dataset.location[0]; // 因為我們有指定 locationName，所以只會回傳一筆，就是該縣市
+    const locationData = dataset.location[0];
 
     if (!locationData) {
       throw new Error(`找不到 ${cityName} 的資料`);
     }
 
-    // 4. 解析數據 (邏輯跟之前一樣)
     const weatherElements = locationData.weatherElement;
-    const getEl = (code) => weatherElements.find(e => e.elementName === code).time;
+    
+    // 安全地取得資料陣列 (防呆)
+    const getEl = (code) => {
+        const found = weatherElements.find(e => e.elementName === code);
+        return found ? found.time : [];
+    };
     
     const wxList = getEl("Wx");
-    const tList = getEl("T");
+    const minTList = getEl("MinT"); // 最低溫
+    const maxTList = getEl("MaxT"); // 最高溫
     const popList = getEl("PoP12h");
 
     const dailyForecasts = [];
     const processedDates = new Set();
 
+    // 遍歷資料
     wxList.forEach((item, index) => {
         const startTime = item.startTime;
         const dateStr = startTime.split("T")[0]; 
 
         if (!processedDates.has(dateStr)) {
             processedDates.add(dateStr);
-            const tempVal = tList[index]?.elementValue[0].value || "--";
+            
+            // 安全取值 (使用 Optional Chaining ?.)
+            const minVal = minTList[index]?.elementValue[0].value;
+            const maxVal = maxTList[index]?.elementValue[0].value;
             const rainVal = popList[index]?.elementValue[0].value || "0";
+            
+            // ⚠️ 修正：手動計算平均溫度給前端
+            let avgTemp = "--";
+            if (minVal && maxVal) {
+                avgTemp = Math.round((parseInt(minVal) + parseInt(maxVal)) / 2).toString();
+            }
+
             const safeRain = rainVal === " " ? "0" : rainVal;
 
             dailyForecasts.push({
                 date: dateStr,
                 weather: item.elementValue[0].value,
-                temp: tempVal,
+                temp: avgTemp, // 前端依舊讀取這個 temp 欄位
                 rain: safeRain
             });
         }
@@ -123,7 +134,7 @@ const getWeeklyWeather = async (req, res) => {
       success: true,
       data: {
         city: cityName,
-        district: "", // 不需要行政區了
+        district: "", 
         current: current,
         forecasts: future
       }
